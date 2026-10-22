@@ -74,7 +74,7 @@ collect_stats() {   # $1=profile  $2=file csv
     # shellcheck disable=SC2086
     docker stats --no-stream --format '{{.Name}},{{.CPUPerc}},{{.MemUsage}}' $ids 2>/dev/null \
       | while IFS= read -r line; do echo "$(date +%s),$line"; done >> "$2"
-    sleep 1
+    sleep 2   # docker stats sendiri memakan CPU; jangan terlalu rapat di server kecil
   done
 }
 

@@ -7,12 +7,13 @@
 //   THINK         think time antar request, detik             (default: 0)
 //   WARMUP_S      lama warm-up, detik                         (default: 15)
 //   P95_MS        ambang p95 (ms) untuk threshold             (default: 1000)
-//   RAMP_LEVELS   "50,100,200,400,800"   (VU, scenario ramp)
+//   (default di bawah ini untuk server kecil 1 vCPU; naikkan untuk server besar)
+//   RAMP_LEVELS   "10,25,50,100,200"   (VU, scenario ramp)
 //   HOLD_S        tahan tiap level, detik                     (default: 30)
-//   SPIKE_BASE / SPIKE_PEAK   VU normal & puncak              (20 / 800)
-//   SOAK_VUS / SOAK_DURATION                                  (100 / 30m)
-//   RATE_LEVELS   "50,100,250,500,1000"  (req/s, scenario arrival)
-//   MAX_VUS       batas VU untuk scenario arrival             (2000)
+//   SPIKE_BASE / SPIKE_PEAK   VU normal & puncak              (5 / 200)
+//   SOAK_VUS / SOAK_DURATION                                  (30 / 30m)
+//   RATE_LEVELS   "20,50,100,200,400"  (req/s, scenario arrival)
+//   MAX_VUS       batas VU untuk scenario arrival             (600)
 
 import http from 'k6/http';
 import { check, sleep, fail } from 'k6';
@@ -89,7 +90,7 @@ function mainScenario() {
 
     case 'ramp': {
       const stages = [];
-      for (const target of levels('RAMP_LEVELS', '50,100,200,400,800')) {
+      for (const target of levels('RAMP_LEVELS', '10,25,50,100,200')) {
         stages.push({ duration: '10s', target });
         stages.push({ duration: `${HOLD_S}s`, target });
       }
@@ -98,8 +99,8 @@ function mainScenario() {
     }
 
     case 'spike': {
-      const lo = parseInt(__ENV.SPIKE_BASE || '20');
-      const hi = parseInt(__ENV.SPIKE_PEAK || '800');
+      const lo = parseInt(__ENV.SPIKE_BASE || '5');
+      const hi = parseInt(__ENV.SPIKE_PEAK || '200');
       return {
         ...base,
         executor: 'ramping-vus',
@@ -120,14 +121,14 @@ function mainScenario() {
       return {
         ...base,
         executor: 'constant-vus',
-        vus: parseInt(__ENV.SOAK_VUS || '100'),
+        vus: parseInt(__ENV.SOAK_VUS || '30'),
         duration: __ENV.SOAK_DURATION || '30m',
       };
 
     case 'arrival': {
       // Model terbuka: laju request konstan, tidak bergantung kecepatan server
       const stages = [];
-      for (const target of levels('RATE_LEVELS', '50,100,250,500,1000')) {
+      for (const target of levels('RATE_LEVELS', '20,50,100,200,400')) {
         stages.push({ duration: '10s', target });
         stages.push({ duration: `${HOLD_S}s`, target });
       }
@@ -136,8 +137,8 @@ function mainScenario() {
         executor: 'ramping-arrival-rate',
         startRate: 10,
         timeUnit: '1s',
-        preAllocatedVUs: 200,
-        maxVUs: parseInt(__ENV.MAX_VUS || '2000'),
+        preAllocatedVUs: 100,
+        maxVUs: parseInt(__ENV.MAX_VUS || '600'),
         stages,
       };
     }
@@ -151,7 +152,7 @@ export const options = {
   scenarios: {
     warmup: {
       executor: 'constant-vus',
-      vus: 20,
+      vus: 5,
       duration: `${WARMUP_S}s`,
       exec: 'warm',
       tags: { phase: 'warmup' },

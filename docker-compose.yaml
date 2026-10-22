@@ -16,8 +16,9 @@ services:
   db:
     image: ${MYSQL_IMAGE}
     command:
-      - --max_connections=1000
-      - --innodb_buffer_pool_size=256M
+      - --max_connections=${DB_MAX_CONN:-1000}
+      - --innodb_buffer_pool_size=${DB_BUFFER_POOL:-256M}
+      - --performance_schema=OFF
       - --innodb_flush_log_at_trx_commit=2
       - --skip-log-bin
     environment:
