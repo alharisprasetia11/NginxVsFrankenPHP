@@ -1,36 +1,25 @@
--- Pastikan database dipilih
 USE myapp;
 
--- 1. Buat Tabel
 CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     nama VARCHAR(100) NOT NULL,
     nim VARCHAR(20) NOT NULL UNIQUE
-);
+) ENGINE=InnoDB;
 
--- 2. Buat Stored Procedure untuk Generate Data
-DELIMITER $$
+-- Tabel untuk uji tulis (action=dbwrite)
+CREATE TABLE IF NOT EXISTS bench_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    payload VARCHAR(255) NOT NULL,
+    created_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB;
 
-CREATE PROCEDURE GenerateDummyUsers()
-BEGIN
-    DECLARE i INT DEFAULT 1;
-    
-    -- Cek apakah tabel kosong agar tidak duplikat saat restart
-    IF (SELECT COUNT(*) FROM users) = 0 THEN
-        WHILE i <= 50 DO
-            INSERT INTO users (nama, nim) VALUES (
-                CONCAT('Mahasiswa ', i),             -- Hasil: Mahasiswa 1
-                CONCAT('101', LPAD(i, 5, '0'))       -- Hasil: 10100001
-            );
-            SET i = i + 1;
-        END WHILE;
-    END IF;
-END$$
+-- Isi 500 baris dengan recursive CTE (tanpa stored procedure / DELIMITER)
+SET SESSION cte_max_recursion_depth = 5000;
 
-DELIMITER ;
-
--- 3. Jalankan Procedure
-CALL GenerateDummyUsers();
-
--- 4. Hapus Procedure (bersih-bersih)
-DROP PROCEDURE GenerateDummyUsers;
+INSERT INTO users (nama, nim)
+WITH RECURSIVE seq (n) AS (
+    SELECT 1
+    UNION ALL
+    SELECT n + 1 FROM seq WHERE n < 500
+)
+SELECT CONCAT('Mahasiswa ', n), CONCAT('101', LPAD(n, 5, '0')) FROM seq;

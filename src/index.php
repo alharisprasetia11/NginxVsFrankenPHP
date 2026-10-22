@@ -1,117 +1,163 @@
 <?php
+declare(strict_types=1);
+
 ignore_user_abort(true);
 
-function fib($n)
+/**
+ * Aplikasi benchmark. Mode dipilih lewat env APP_MODE:
+ *   fpm     -> PHP-FPM di belakang Nginx
+ *   classic -> FrankenPHP tanpa worker (script dijalankan per request)
+ *   worker  -> FrankenPHP worker mode (script hidup terus, loop request)
+ */
+
+function fib(int $n): int
 {
-    if ($n < 0) return 0;
-    if ($n < 2) return $n;
+    if ($n < 2) {
+        return $n < 0 ? 0 : $n;
+    }
     return fib($n - 1) + fib($n - 2);
 }
 
-function getDB()
+/** Koneksi PDO; $reset=true membuang koneksi lama (non-persistent) untuk reconnect. */
+function pdo(bool $reset = false): PDO
 {
-    static $pdo;
+    static $pdo = null;
 
-    if ($pdo) {
+    if ($reset) {
+        $pdo = null;
+    }
+    if ($pdo !== null) {
         return $pdo;
     }
 
-    $host = 'db';
-    $db   = 'myapp';
-    $user = 'myuser';
-    $pass = 'mypassword';
-    $charset = 'utf8mb4';
-
-    $dsn = "mysql:host=$host;dbname=$db;charset=$charset";
     $options = [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES   => false,
-        PDO::ATTR_PERSISTENT         => true,
+        PDO::ATTR_PERSISTENT         => !$reset,
+        PDO::ATTR_TIMEOUT            => 5,
     ];
 
+    return $pdo = new PDO('mysql:host=db;dbname=myapp;charset=utf8mb4', 'myuser', 'mypassword', $options);
+}
+
+/** Jalankan query dan reconnect SEKALI bila koneksi putus (mis. MySQL restart). */
+function withDb(callable $fn): mixed
+{
     try {
-        $pdo = new PDO($dsn, $user, $pass, $options);
-        return $pdo;
-    } catch (\PDOException $e) {
+        return $fn(pdo());
+    } catch (PDOException $e) {
+        $code = (int) ($e->errorInfo[1] ?? 0);
+        if (in_array($code, [2002, 2006, 2013], true) || str_contains($e->getMessage(), 'gone away')) {
+            return $fn(pdo(true));
+        }
         throw $e;
     }
 }
 
-function myAppLogic()
+function respond(array $payload, int $status = 200): void
 {
+    http_response_code($status);
     header('Content-Type: application/json');
+    echo json_encode(
+        $payload + [
+            'server' => $_SERVER['SERVER_SOFTWARE'] ?? 'unknown',
+            'mode'   => getenv('APP_MODE') ?: 'fpm',
+        ]
+    );
+}
 
-    $action = $_GET['action'] ?? 'hello';
+function handleRequest(): void
+{
+    static $served = 0;
+    $served++;
 
-    switch ($action) {
-        case 'cpu':
-            $result = fib(25);
-            echo json_encode([
-                'status' => 'ok',
-                'server' => $_SERVER['SERVER_SOFTWARE'] ?? 'FrankenPHP',
-                'result' => $result
-            ]);
-            break;
+    $action = (string) ($_GET['action'] ?? 'hello');
 
-        case 'io':
-            $file = sys_get_temp_dir() . '/test_' . uniqid() . '.tmp';
-            file_put_contents($file, str_repeat('IO Test Data ', 100));
-            $content = file_get_contents($file);
-            unlink($file);
-            echo json_encode(['status' => 'ok', 'server' => $_SERVER['SERVER_SOFTWARE'] ?? 'FrankenPHP']);
-            break;
+    try {
+        switch ($action) {
+            case 'health':
+                respond(['status' => 'ok']);
+                break;
 
-        case 'db':
-            try {
-                $pdo = getDB();
+            case 'cpu':
+                $n = max(1, min(30, (int) ($_GET['n'] ?? 25)));
+                respond(['status' => 'ok', 'result' => fib($n)]);
+                break;
 
-                $stmt = $pdo->query("SELECT id, nama, nim FROM users LIMIT 50");
-                $data = $stmt->fetchAll();
+            case 'io':
+                $file = sys_get_temp_dir() . '/test_' . bin2hex(random_bytes(8)) . '.tmp';
+                file_put_contents($file, str_repeat('IO Test Data ', 100));
+                $content = file_get_contents($file);
+                unlink($file);
+                respond(['status' => 'ok', 'bytes' => strlen((string) $content)]);
+                break;
 
-                echo json_encode([
-                    'status' => 'ok',
-                    'server' => $_SERVER['SERVER_SOFTWARE'] ?? 'FrankenPHP',
-                    'count' => count($data),
-                    'data' => $data
+            case 'db':
+                $data = withDb(static fn (PDO $db) => $db->query('SELECT id, nama, nim FROM users LIMIT 50')->fetchAll());
+                respond(['status' => 'ok', 'count' => count($data), 'data' => $data]);
+                break;
+
+            case 'dbwrite':
+                $id = withDb(static function (PDO $db) {
+                    $st = $db->prepare('INSERT INTO bench_log (payload, created_at) VALUES (?, NOW(6))');
+                    $st->execute([bin2hex(random_bytes(32))]);
+                    return (int) $db->lastInsertId();
+                });
+                respond(['status' => 'ok', 'id' => $id]);
+                break;
+
+            case 'slow':
+                // Simulasi dependensi eksternal yang lambat (default 100 ms, maks 2000 ms)
+                $ms = max(0, min(2000, (int) ($_GET['ms'] ?? 100)));
+                usleep($ms * 1000);
+                respond(['status' => 'ok', 'slept_ms' => $ms]);
+                break;
+
+            case 'stats':
+                // Dipakai untuk memantau memori per proses/worker saat soak test
+                respond([
+                    'status'      => 'ok',
+                    'pid'         => getmypid(),
+                    'served'      => $served,
+                    'mem_bytes'   => memory_get_usage(true),
+                    'mem_peak'    => memory_get_peak_usage(true),
                 ]);
-            } catch (\Exception $e) {
-                http_response_code(500);
-                echo json_encode([
-                    'status' => 'error',
-                    'message' => 'DB Error: ' . $e->getMessage()
-                ]);
-            }
-            break;
+                break;
 
-        case 'hello':
-        default:
-            header('Content-Type: text/html');
-            if (file_exists('web.php')) {
-                include 'web.php';
-            } else {
-                echo "<h1>Hello World</h1>";
-            }
-            break;
+            case 'hello':
+            default:
+                header('Content-Type: text/html');
+                require __DIR__ . '/web.php';
+                break;
+        }
+    } catch (Throwable $e) {
+        // Jangan sampai exception mematikan worker
+        respond(['status' => 'error', 'message' => get_class($e) . ': ' . $e->getMessage()], 500);
     }
 }
 
-$workerAvailable = function_exists('frankenphp_handle_request');
+if ((getenv('APP_MODE') ?: 'fpm') === 'worker') {
+    if (!function_exists('frankenphp_handle_request')) {
+        fwrite(STDERR, "APP_MODE=worker tetapi bukan FrankenPHP worker\n");
+        exit(1);
+    }
 
-if ($workerAvailable) {
-    try { getDB(); } catch (Exception $e) {}
+    try {
+        pdo(); // pre-warm koneksi
+    } catch (Throwable) {
+    }
 
-    $nbRequests = 0;
-    do {
-        $running = \frankenphp_handle_request(function () {
-            myAppLogic();
-        });
+    $handler = static function (): void {
+        handleRequest();
+    };
 
-        if (++$nbRequests > 500) {
+    $count = 0;
+    while (frankenphp_handle_request($handler)) {
+        if (++$count % 500 === 0) {
             gc_collect_cycles();
-            $nbRequests = 0;
         }
-    } while ($running);
+    }
 } else {
-    myAppLogic();
+    handleRequest();
 }

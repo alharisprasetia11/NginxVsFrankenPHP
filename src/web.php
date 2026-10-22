@@ -7,10 +7,10 @@
 </head>
 <body>
     <center>
-        <h1>WEB SEDERHANA DENGAN <?= $_SERVER['SERVER_SOFTWARE'] ?? 'FrankenPHP' ?> </h1>
+        <h1>WEB SEDERHANA DENGAN <?= htmlspecialchars($_SERVER['SERVER_SOFTWARE'] ?? 'FrankenPHP') ?></h1>
     </center>
     <p>
-        <?= $_SERVER['SERVER_SOFTWARE'] ?? 'FrankenPHP'; ?>
+        <?= htmlspecialchars($_SERVER['SERVER_SOFTWARE'] ?? 'FrankenPHP') ?> &middot; mode: <?= htmlspecialchars(getenv('APP_MODE') ?: 'fpm') ?>
     </p>
 </body>
 </html>
